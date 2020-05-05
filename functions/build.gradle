@@ -1,0 +1,21 @@
+plugins {
+    id 'com.github.johnrengelman.shadow' version '5.2.0'
+    id 'java'
+}
+
+sourceCompatibility = targetCompatibility = JavaVersion.VERSION_1_8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly 'org.apache.pulsar:pulsar-functions-api:2.5.0'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.11.0'
+}
+
+shadowJar {
+    relocate 'com.fasterxml.jackson', 'ru.lanwen.pulsar.com.fasterxml.jackson'
+    minimize()
+}
+

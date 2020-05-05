@@ -1,0 +1,36 @@
+plugins {
+    id 'java'
+}
+
+sourceCompatibility = targetCompatibility = JavaVersion.VERSION_11
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation 'org.testcontainers:pulsar'
+
+    testImplementation 'io.projectreactor:reactor-core'
+
+    testImplementation 'org.apache.pulsar:pulsar-client-admin:2.5.0'
+
+    testImplementation('org.apache.pulsar:pulsar-functions-local-runner-original:2.5.0') {
+        exclude group: 'log4j'
+        exclude group: 'org.slf4j', module: 'slf4j-log4j12'
+    }
+
+    testCompileOnly project(':functions') // just for IDE which don't pick up classpath rearrangement
+}
+
+test {
+    def functionsProject = project(':functions')
+
+    dependsOn functionsProject.shadowJar
+
+    // Rearrange test classpath, add compiled JAR instead of main classes
+    classpath = project.sourceSets.test.output + configurations.testRuntimeClasspath + files(functionsProject.shadowJar.archiveFile)
+    systemProperty "functions.jar.path", file(functionsProject.shadowJar.archiveFile)
+
+    useJUnitPlatform()
+}

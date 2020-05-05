@@ -1,0 +1,4 @@
+rootProject.name = 'functions'
+include 'functions'
+include 'tests'
+
