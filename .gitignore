@@ -2,3 +2,4 @@
 *.yaml
 .venv
 .idea
+build

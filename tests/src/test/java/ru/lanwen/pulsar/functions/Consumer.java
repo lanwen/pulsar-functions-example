@@ -3,6 +3,8 @@ package ru.lanwen.pulsar.functions;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.SubscriptionType;
+import org.apache.pulsar.client.impl.MessageIdImpl;
+import org.apache.pulsar.client.impl.TopicMessageIdImpl;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -14,7 +16,7 @@ public class Consumer {
         return Flux
                 .usingWhen(
                         Mono.fromCompletionStage(() -> client.newConsumer()
-                                .subscriptionType(SubscriptionType.Shared)
+                                .subscriptionType(SubscriptionType.Failover)
                                 .consumerName("consumer-" + UUID.randomUUID())
                                 .subscriptionName("subscription-" + UUID.randomUUID())
                                 .topic(testInputsTopic)
@@ -25,6 +27,9 @@ public class Consumer {
                                 .repeat(),
                         consumer -> Mono.fromCompletionStage(consumer.closeAsync())
                 )
-                .doOnNext(msg -> System.out.printf("[%s]: %s%n", testInputsTopic, new String(msg.getData())));
+                .doOnNext(msg -> {
+                    var msgid = ((TopicMessageIdImpl) msg.getMessageId()).getInnerMessageId();
+                    System.out.printf("[%s]: %s (%s - %s)%n", testInputsTopic, new String(msg.getData()), msgid, msg.getKey());
+                });
     }
 }

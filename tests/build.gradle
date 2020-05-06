@@ -31,6 +31,7 @@ test {
     // Rearrange test classpath, add compiled JAR instead of main classes
     classpath = project.sourceSets.test.output + configurations.testRuntimeClasspath + files(functionsProject.shadowJar.archiveFile)
     systemProperty "functions.jar.path", file(functionsProject.shadowJar.archiveFile)
+    systemProperty "functions.raw.jar.path", file(functionsProject.jar.archiveFile)
 
     useJUnitPlatform()
 }

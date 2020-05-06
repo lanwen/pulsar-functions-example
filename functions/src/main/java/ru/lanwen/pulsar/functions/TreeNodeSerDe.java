@@ -2,6 +2,7 @@ package ru.lanwen.pulsar.functions;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.functions.api.SerDe;
 
 import java.io.IOException;

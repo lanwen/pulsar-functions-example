@@ -6,7 +6,10 @@ import org.apache.pulsar.functions.api.Context;
 import org.apache.pulsar.functions.api.Function;
 import org.slf4j.Logger;
 
-public class SerDeFunction implements Function<byte[], byte[]> {
+import java.nio.ByteBuffer;
+import java.util.Random;
+
+public class WriteCtxFunction implements Function<byte[], byte[]> {
 
     final static TreeNodeSerDe SERDE = new TreeNodeSerDe();
 
@@ -17,6 +20,11 @@ public class SerDeFunction implements Function<byte[], byte[]> {
         Logger log = ctx.getLogger();
         String v = value.get("value").asText();
         log.info("value found - {}", v);
+
+        String key = String.valueOf(new Random().nextInt() % 5);
+
+        ctx.putState(key, ByteBuffer.wrap(new byte[] {1}));
+        ctx.incrCounter(key, 1L);
 
         ((ObjectNode) value).put("field", "changed");
 

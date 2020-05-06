@@ -6,8 +6,11 @@ package ru.lanwen.pulsar.functions;
 
 
 import org.apache.pulsar.client.admin.PulsarAdmin;
+import org.apache.pulsar.client.admin.PulsarAdminException;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
+import org.apache.pulsar.client.api.SubscriptionInitialPosition;
+import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.common.functions.FunctionConfig;
 import org.apache.pulsar.functions.LocalRunner;
 import org.junit.jupiter.api.BeforeAll;
@@ -18,7 +21,7 @@ import reactor.core.Disposable;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
+import java.util.UUID;
 
 import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assert.assertThat;
@@ -31,8 +34,10 @@ public class IntegrationTest {
             .waitingFor(Wait.forLogMessage(".*Function worker service started.*", 1));
 
     static final String FUNCTIONS_JAR_PATH_PROPERTY = "functions.jar.path";
+    static final String FUNCTIONS_RAW_JAR_PATH_PROPERTY = "functions.raw.jar.path";
     static final String TEST_INPUTS_TOPIC = "test-inputs-topic";
     static final String TEST_OUTPUT_TOPIC = "test-output-topic";
+    static final String TEST_OUTPUT_CTX_TOPIC = "test-output-ctx-topic";
     static final String TEST_DLQ_TOPIC = "test-dlq-topic";
     static final String TEST_LOG_TOPIC = "test-log-topic";
 
@@ -48,17 +53,22 @@ public class IntegrationTest {
     }
 
     @BeforeAll
-    static void beforeAll() throws PulsarClientException {
+    static void beforeAll() throws PulsarClientException, PulsarAdminException {
         pulsarAdmin = PulsarAdmin.builder()
+//                .serviceHttpUrl("http://localhost:8080")
                 .serviceHttpUrl(PULSAR.getHttpServiceUrl())
                 .build();
 
         pulsarClient = PulsarClient.builder()
+//                .serviceUrl("pulsar://localhost:6650")
                 .serviceUrl(PULSAR.getPulsarBrokerUrl())
                 .build();
+
+        pulsarAdmin.topics().createPartitionedTopic(TEST_INPUTS_TOPIC, 3);
+        pulsarAdmin.topics().createPartitionedTopic(TEST_OUTPUT_TOPIC, 3);
     }
 
-    FunctionConfig confSimple = FunctionConfig.builder()
+    FunctionConfig.FunctionConfigBuilder confSimple = FunctionConfig.builder()
             .tenant("public")
             .namespace("default")
             .name("exclamation")
@@ -67,31 +77,25 @@ public class IntegrationTest {
             .output(TEST_OUTPUT_TOPIC)
             .className(ExclamationFunction.class.getName())
             .jar(System.getProperty(FUNCTIONS_JAR_PATH_PROPERTY))
-            .runtime(FunctionConfig.Runtime.JAVA)
-            .build();
+            .runtime(FunctionConfig.Runtime.JAVA);
 
-    FunctionConfig confSerde = FunctionConfig.builder()
+    FunctionConfig.FunctionConfigBuilder confSerde = FunctionConfig.builder()
             .tenant("public")
             .namespace("default")
-            .name("serde")
+            .name(UUID.randomUUID().toString())
             .retainOrdering(true)
             .inputs(List.of(TEST_INPUTS_TOPIC))
             .output(TEST_OUTPUT_TOPIC)
             .deadLetterTopic(TEST_DLQ_TOPIC)
             .maxMessageRetries(2)
             .logTopic(TEST_LOG_TOPIC)
-            .className(SerDeFunction.class.getName())
             .jar(System.getProperty(FUNCTIONS_JAR_PATH_PROPERTY))
-            .runtime(FunctionConfig.Runtime.JAVA)
-            .customSerdeInputs(Map.of(
-                    TEST_INPUTS_TOPIC, TreeNodeSerDe.class.getName()
-            ))
-            .outputSerdeClassName(TreeNodeSerDe.class.getName())
-            .build();
+            .className(SerDeFunction.class.getName())
+            .runtime(FunctionConfig.Runtime.JAVA);
 
     @Test
     public void shouldRunSimpleFunction() throws Exception {
-        LocalRunner.builder().functionConfig(confSimple).build().start(false);
+        LocalRunner.builder().functionConfig(confSimple.build()).build().start(false);
 
         Disposable publisher = Producer.string(pulsarClient, TEST_INPUTS_TOPIC).subscribe();
         Disposable listener = Consumer.consumer(pulsarClient, TEST_INPUTS_TOPIC).subscribe();
@@ -103,7 +107,7 @@ public class IntegrationTest {
 
     @Test
     public void shouldRunSimpleFunctionCluster() throws Exception {
-        pulsarAdmin.functions().createFunction(confSimple, System.getProperty(FUNCTIONS_JAR_PATH_PROPERTY));
+        pulsarAdmin.functions().createFunction(confSimple.build(), System.getProperty(FUNCTIONS_JAR_PATH_PROPERTY));
 
         Disposable subscribe = Producer.string(pulsarClient, TEST_INPUTS_TOPIC).log().subscribe();
         Long inputCnt = Consumer.consumer(pulsarClient, TEST_INPUTS_TOPIC).doOnTerminate(subscribe::dispose).log().take(2).count().block(Duration.ofMinutes(1));
@@ -114,7 +118,7 @@ public class IntegrationTest {
 
     @Test
     public void shouldRunSerDeFunction() throws Exception {
-        LocalRunner.builder().functionConfig(confSerde).build().start(false);
+        LocalRunner.builder().functionConfig(confSerde.build()).build().start(false);
 
         Disposable publisher = Producer.json(pulsarClient, TEST_INPUTS_TOPIC).subscribe();
         Disposable listener = Consumer.consumer(pulsarClient, TEST_INPUTS_TOPIC).subscribe();
@@ -130,16 +134,32 @@ public class IntegrationTest {
 
     @Test
     public void shouldRunSerDeFunctionCluster() throws Exception {
-        pulsarAdmin.functions().createFunction(confSerde, System.getProperty(FUNCTIONS_JAR_PATH_PROPERTY));
+        String subname = UUID.randomUUID().toString();
+        FunctionConfig conf = confSerde.subName(subname).build();
+
+        Producer.json(pulsarClient, TEST_INPUTS_TOPIC).take(2).blockLast(Duration.ofMinutes(1));
+        Disposable listener = Consumer.consumer(pulsarClient, TEST_INPUTS_TOPIC).subscribe();
+
+        pulsarClient.newConsumer()
+                .subscriptionType(SubscriptionType.Failover)
+                .consumerName("consumer-" + UUID.randomUUID())
+                .subscriptionName(subname)
+                .subscriptionInitialPosition(SubscriptionInitialPosition.Earliest)
+                .topic(TEST_INPUTS_TOPIC)
+                .subscribe()
+                .close();
+        pulsarAdmin.functions().createFunction(conf, System.getProperty(FUNCTIONS_JAR_PATH_PROPERTY));
 
         Disposable publisher = Producer.json(pulsarClient, TEST_INPUTS_TOPIC).subscribe();
-        Disposable listener = Consumer.consumer(pulsarClient, TEST_INPUTS_TOPIC).subscribe();
         Disposable listenerdlq = Consumer.consumer(pulsarClient, TEST_DLQ_TOPIC).subscribe();
         Disposable listenerlog = Consumer.consumer(pulsarClient, TEST_LOG_TOPIC).subscribe();
 
+        System.out.println("******************");
         System.out.println(String.format(
-                "docker exec %s cat /tmp/functions/%s/%s/%s/%s-0.log", PULSAR.getContainerId(), confSerde.getTenant(), confSerde.getNamespace(), confSerde.getName(), confSerde.getName()
+                "docker exec %s cat /tmp/functions/%s/%s/%s/%s-0.log", PULSAR.getContainerId(),
+                conf.getTenant(), conf.getNamespace(), conf.getName(), conf.getName()
         ));
+        System.out.println("******************");
 
         Consumer.consumer(pulsarClient, TEST_OUTPUT_TOPIC)
                 .doOnTerminate(publisher::dispose)
@@ -149,5 +169,51 @@ public class IntegrationTest {
                 .blockLast(Duration.ofMinutes(10));
     }
 
+    @Test
+    public void shouldExchangeContext() throws Exception {
+        Disposable listener = Consumer.consumer(pulsarClient, TEST_INPUTS_TOPIC).subscribe();
+        Disposable listenerctx = Consumer.consumer(pulsarClient, TEST_OUTPUT_CTX_TOPIC).subscribe();
+        Disposable listenerout = Consumer.consumer(pulsarClient, TEST_OUTPUT_TOPIC).subscribe();
+
+        var conf = confSerde.className(WriteCtxFunction.class.getName()).build();
+
+        var ctxconf = FunctionConfig.builder()
+                .tenant("public")
+                .namespace("default")
+                .name(UUID.randomUUID().toString())
+                .retainOrdering(true)
+                .inputs(List.of(TEST_INPUTS_TOPIC))
+                .output(TEST_OUTPUT_CTX_TOPIC)
+                .className(SimpleCtxFunction.class.getName())
+                .jar(System.getProperty(FUNCTIONS_RAW_JAR_PATH_PROPERTY))
+                .runtime(FunctionConfig.Runtime.JAVA).build();
+
+        pulsarAdmin.functions().createFunction(conf, System.getProperty(FUNCTIONS_JAR_PATH_PROPERTY));
+        pulsarAdmin.functions().createFunction(ctxconf, System.getProperty(FUNCTIONS_RAW_JAR_PATH_PROPERTY));
+
+        Disposable publisher = Producer.json(pulsarClient, TEST_INPUTS_TOPIC).subscribe();
+
+        System.out.println("******************");
+        System.out.println(String.format(
+                "docker exec %s cat /tmp/functions/%s/%s/%s/%s-0.log", PULSAR.getContainerId(),
+                conf.getTenant(), conf.getNamespace(), conf.getName(), conf.getName()
+        ));
+        System.out.println("******************");
+
+
+        System.out.println("******************");
+        System.out.println(String.format(
+                "docker exec %s cat /tmp/functions/%s/%s/%s/%s-0.log", PULSAR.getContainerId(),
+                conf.getTenant(), conf.getNamespace(), ctxconf.getName(), ctxconf.getName()
+        ));
+        System.out.println("******************");
+
+        Consumer.consumer(pulsarClient, TEST_OUTPUT_TOPIC)
+                .doOnTerminate(publisher::dispose)
+                .doOnTerminate(listener::dispose)
+                .doOnTerminate(listenerout::dispose)
+                .doOnTerminate(listenerctx::dispose)
+                .blockLast(Duration.ofMinutes(10));
+    }
 
 }
