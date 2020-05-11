@@ -2,12 +2,6 @@ plugins {
     id 'java'
 }
 
-
-
-dependencies {
-
-}
-
 allprojects {
     apply plugin: 'java'
 
